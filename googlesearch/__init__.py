@@ -189,16 +189,17 @@ def get_page(url, user_agent=None, verify_ssl=True):
 # Returns None if the link doesn't yield a valid result.
 def filter_result(link):
     try:
-
+        l = link['href']
         # Decode hidden URLs.
-        if link.startswith('/url?'):
-            o = urlparse(link, 'http')
-            link = parse_qs(o.query)['q'][0]
+        if l.startswith('/url?'):
+            o = urlparse(l, 'http')
+            l = parse_qs(o.query)['q'][0]
+            link['href'] = l
 
         # Valid results are absolute URLs not pointing to a Google domain,
         # like images.google.com or googleusercontent.com for example.
         # TODO this could be improved!
-        o = urlparse(link, 'http')
+        o = urlparse(l, 'http')
         if o.netloc and 'google' not in o.netloc:
             return link
 
@@ -206,11 +207,27 @@ def filter_result(link):
     except Exception:
         pass
 
+def _is_google_result_link(tag):
+    if not tag.name == 'a':
+        return False
+    if not tag['href'].startswith('/url'):
+        return False
+    classes = tag.get('class')
+    if classes == None or len(tag.get('class')) != 2:
+        return False
+    if len(tag.find_all('span')) != 3:
+        return False
+    return True
+
+def extract_title_and_link(tag):
+    title = tag.find('span').get_text()
+
+    return {'title': title, 'link': tag['href']}
 
 # Returns a generator that yields URLs.
 def search(query, tld='com', lang='en', tbs='0', safe='off', num=10, start=0,
            stop=None, pause=2.0, country='', extra_params=None,
-           user_agent=None, verify_ssl=True):
+           user_agent=None, verify_ssl=True, include_title=False):
     """
     Search the given query string using Google.
 
@@ -310,7 +327,7 @@ def search(query, tld='com', lang='en', tbs='0', safe='off', num=10, start=0,
         else:
             soup = BeautifulSoup(html)
         try:
-            anchors = soup.find(id='search').findAll('a')
+            anchors = soup.find(id='search').findAll(_is_google_result_link)
             # Sometimes (depending on the User-agent) there is
             # no id "search" in html response...
         except AttributeError:
@@ -318,16 +335,10 @@ def search(query, tld='com', lang='en', tbs='0', safe='off', num=10, start=0,
             gbar = soup.find(id='gbar')
             if gbar:
                 gbar.clear()
-            anchors = soup.findAll('a')
+            anchors = soup.findAll(_is_google_result_link)
 
         # Process every anchored URL.
-        for a in anchors:
-
-            # Get the URL from the anchor tag.
-            try:
-                link = a['href']
-            except KeyError:
-                continue
+        for link in anchors:
 
             # Filter invalid links and links pointing to Google itself.
             link = filter_result(link)
@@ -340,8 +351,15 @@ def search(query, tld='com', lang='en', tbs='0', safe='off', num=10, start=0,
                 continue
             hashes.add(h)
 
+            if include_title:
+                data = extract_title_and_link(link)
+                if not data:
+                    continue
+            else:
+                data = link['href']
+
             # Yield the result.
-            yield link
+            yield data
 
             # Increase the results counter.
             # If we reached the limit, stop.
